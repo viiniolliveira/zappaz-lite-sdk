@@ -114,3 +114,192 @@ test('own inbound messages reach onEvent but not onMessage', async () => {
   assert.deepEqual(events, [data])
   assert.deepEqual(messages, [])
 })
+
+// Debounced delivery uses real timers so these tests run in both Node and Bun.
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+async function waitFor(predicate) {
+  const deadline = Date.now() + 2000
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting for webhook handler')
+    await sleep(5)
+  }
+}
+function debouncedSetup(options = {}) {
+  return new Zappaz({ baseUrl: 'https://api.example.test', apiKey: 'key', sessionId: session.id, webhookSecret: secret, ...options })
+}
+function delivery(message, event = 'inbound-message.upsert', eventSession = session) {
+  return { event, payload: { message: { ...baseMessage, type: 'text', text: 'hello', ...message } }, session: eventSession }
+}
+async function send(zappaz, message, event, eventSession) {
+  return zappaz.handleWebhook(request(delivery(message, event, eventSession)))
+}
+
+test('debounce resets for valid texts, dispatches after immediate handlers, and replies quoting the last message', async () => {
+  const zappaz = debouncedSetup(), batches = [], immediate = [], sent = []
+  zappaz.messages.sendText = async body => { sent.push(body); return {} }
+  zappaz.onMessage('text', ctx => immediate.push(ctx.message.id))
+  const unsubscribe = zappaz.onTextDebounced({ delayMs: 100 }, async ctx => {
+    batches.push(ctx)
+    await ctx.reply('answer', { quote: true })
+  })
+  try {
+    assert.equal((await send(zappaz, { id: 'first', text: 'one' })).status, 204)
+    await sleep(60)
+    assert.equal((await send(zappaz, { id: 'last', text: 'two' })).status, 204)
+    await sleep(55)
+    assert.equal(batches.length, 0)
+    assert.deepEqual(immediate, ['first', 'last'])
+    await waitFor(() => sent.length === 1)
+    assert.deepEqual(batches[0].messages.map(m => m.id), ['first', 'last'])
+    assert.deepEqual(batches[0].session, session)
+    assert.equal(batches[0].event, 'inbound-message.upsert')
+    assert.deepEqual(sent, [{ number: baseMessage.chatId, message: 'answer', quoted: 'last' }])
+  } finally { unsubscribe() }
+})
+
+test('batch keys separate group senders and chats; private messages use chat identity without sender', async () => {
+  const zappaz = debouncedSetup(), batches = []
+  const unsubscribe = zappaz.onTextDebounced({ delayMs: 25 }, ctx => batches.push(ctx.messages.map(m => m.id)))
+  try {
+    for (const message of [
+      { id: 'a1', sender: { id: 'a' } }, { id: 'b1', sender: { id: 'b' } },
+      { id: 'a2', sender: { id: 'a' } }, { id: 'c', chatId: 'other@g.us', sender: { id: 'a' } },
+      { id: 'p1', chatId: 'private', isGroup: false, sender: { id: null } },
+      { id: 'p2', chatId: 'private', isGroup: false, sender: { id: '' } },
+    ]) assert.equal((await send(zappaz, message)).status, 204)
+    await waitFor(() => batches.length === 4)
+    assert.deepEqual(batches.map(x => x.join(',')).sort(), ['a1,a2', 'b1', 'c', 'p1,p2'].sort())
+  } finally { unsubscribe() }
+})
+
+test('non-text, blank text, own and outbound events do not enter or reset a batch', async () => {
+  const zappaz = debouncedSetup(), batches = []
+  const unsubscribe = zappaz.onTextDebounced({ delayMs: 100 }, ctx => batches.push(ctx.messages.map(m => m.id)))
+  try {
+    await send(zappaz, { id: 'valid' })
+    await sleep(60)
+    for (const [message, event] of [
+      [{ id: 'image', type: 'image', text: 'caption' }], [{ id: 'blank', text: '  \n ' }],
+      [{ id: 'missing', text: undefined }], [{ id: 'own', fromMe: true }],
+      [{ id: 'outbound' }, 'outbound-message.upsert'], [{ id: 'sent' }, 'messages.send'],
+    ]) assert.equal((await send(zappaz, message, event)).status, 204)
+    await sleep(55)
+    assert.deepEqual(batches, [['valid']])
+    await sleep(110)
+    assert.deepEqual(batches, [['valid']])
+  } finally { unsubscribe() }
+})
+
+test('invalid batching identities report webhook errors; immediate handler failure does not enqueue', async () => {
+  const errors = [], batches = [], zappaz = debouncedSetup({ onWebhookError: e => errors.push(e) })
+  const unsubscribe = zappaz.onTextDebounced({ delayMs: 20 }, ctx => batches.push(ctx))
+  try {
+    assert.equal((await send(zappaz, { chatId: null })).status, 500)
+    assert.equal((await send(zappaz, { sender: { id: null } })).status, 500)
+    assert.equal(errors.length, 2)
+    zappaz.onMessage('text', () => { throw new Error('immediate') })
+    assert.equal((await send(zappaz, { id: 'fail' })).status, 500)
+    await sleep(60)
+    assert.equal(batches.length, 0)
+    assert.equal(errors.length, 3)
+  } finally { unsubscribe() }
+})
+
+test('same-key batches serialize, errors are observed, and later batches recover', async () => {
+  const errors = [], started = [], zappaz = debouncedSetup({ onWebhookError: e => errors.push(e) })
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  const unsubscribe = zappaz.onTextDebounced({ delayMs: 20 }, async ctx => {
+    started.push(ctx.messages[0].id)
+    if (ctx.messages[0].id === 'first') { await gate; throw new Error('batch failed') }
+  })
+  try {
+    await send(zappaz, { id: 'first' })
+    await waitFor(() => started.length === 1)
+    await send(zappaz, { id: 'second' })
+    await sleep(60)
+    assert.deepEqual(started, ['first'])
+    release()
+    await waitFor(() => started.length === 2 && errors.length === 1)
+    assert.deepEqual(started, ['first', 'second'])
+    assert.equal(errors[0].message, 'batch failed')
+    await send(zappaz, { id: 'third' })
+    await waitFor(() => started.length === 3)
+  } finally { release(); unsubscribe() }
+})
+
+test('registrations are isolated; unsubscribe cancels pending and queued work but not running handlers', async () => {
+  const zappaz = debouncedSetup(), a = [], b = []
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  const stopA = zappaz.onTextDebounced({ delayMs: 20 }, async ctx => { a.push(ctx.messages[0].id); await gate; a.push('finished') })
+  const stopB = zappaz.onTextDebounced({ delayMs: 20 }, ctx => b.push(ctx.messages[0].id))
+  try {
+    await send(zappaz, { id: 'first' })
+    await waitFor(() => a.length === 1 && b.length === 1)
+    await send(zappaz, { id: 'queued' })
+    await waitFor(() => b.length === 2)
+    await send(zappaz, { id: 'pending', chatId: 'other@g.us' })
+    stopA(); stopA()
+    release()
+    await waitFor(() => a.includes('finished'))
+    await waitFor(() => b.length === 3)
+    await sleep(40)
+    assert.deepEqual(a, ['first', 'finished'])
+    assert.deepEqual(b, ['first', 'queued', 'pending'])
+  } finally { release(); stopA(); stopB() }
+})
+
+test('debounce rejects invalid delay values', () => {
+  const zappaz = debouncedSetup()
+  for (const delayMs of [0, -1, 1.5, NaN, Infinity, 2147483648]) {
+    assert.throws(() => zappaz.onTextDebounced({ delayMs }, () => {}))
+  }
+  const unsubscribe = zappaz.onTextDebounced({ delayMs: 2147483647 }, () => {})
+  assert.equal(typeof unsubscribe, 'function')
+  unsubscribe()
+})
+
+test('payload logging is opt-in, callback replaces debug and receives an isolated validated envelope', async () => {
+  const original = console.debug, logs = [], observed = [], dispatched = []
+  console.debug = (...args) => logs.push(args)
+  try {
+    const quiet = debouncedSetup()
+    assert.equal((await send(quiet, {})).status, 204)
+    assert.equal(logs.length, 0)
+    const zappaz = debouncedSetup({ logWebhookPayloads: true, onWebhookPayload: event => {
+      observed.push(structuredClone(event))
+      event.payload.message.text = 'mutated'
+      event.session.id = 'mutated'
+    } })
+    zappaz.onMessage('text', ctx => dispatched.push([ctx.message.text, ctx.session.id]))
+    const data = delivery({ text: 'original' })
+    assert.equal((await zappaz.handleWebhook(request(data))).status, 204)
+    assert.deepEqual(observed, [data])
+    assert.deepEqual(dispatched, [['original', session.id]])
+    assert.equal(logs.length, 0)
+    const callbackOnly = debouncedSetup({ onWebhookPayload: event => observed.push(event) })
+    await send(callbackOnly, {})
+    assert.equal(observed.length, 2)
+    const debug = debouncedSetup({ logWebhookPayloads: true })
+    await send(debug, {})
+    assert.equal(logs.length, 1)
+  } finally { console.debug = original }
+})
+
+test('logger failures are observed without preventing dispatch; rejected requests never log', async () => {
+  const errors = [], seen = [], failure = new Error('logging failed')
+  const zappaz = debouncedSetup({ onWebhookPayload: async () => { throw failure }, onWebhookError: async e => { errors.push(e); throw new Error('observer failed') } })
+  zappaz.onMessage('text', ctx => seen.push(ctx.message.id))
+  assert.equal((await send(zappaz, { id: 'ok' })).status, 204)
+  assert.deepEqual(errors, [failure])
+  assert.deepEqual(seen, ['ok'])
+  const logged = [], other = debouncedSetup({ onWebhookPayload: e => logged.push(e) })
+  const unauthorized = new Request('https://zappaz.example.test/webhook', { method: 'POST', headers: { 'content-type': 'application/json', 'x-zappaz-webhook-secret': 'wrong' }, body: JSON.stringify(delivery({})) })
+  assert.equal((await other.handleWebhook(unauthorized)).status, 401)
+  assert.equal((await other.handleWebhook(request({ ...delivery({}), session: { ...session, id: 'other' } }))).status, 403)
+  assert.equal((await other.handleWebhook(request({ ...delivery({}), event: 'unknown' }))).status, 422)
+  assert.equal((await other.handleWebhook(request({ ...delivery({}), payload: { message: {} } }))).status, 400)
+  assert.equal((await other.handleWebhook(request({ event: 'call' }))).status, 400)
+  assert.deepEqual(logged, [])
+})

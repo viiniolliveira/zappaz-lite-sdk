@@ -67,7 +67,9 @@ Somente enviar mensagens não exige `webhookSecret`. Use uma instância por sess
 | `webhookSecret` | Segredo igual ao cadastrado no webhook da Zappaz; de 1 a 2048 caracteres ASCII visíveis, sem espaços. |
 | `authenticateWebhook` | Função opcional `(request: Request) => boolean \| Promise<boolean>`. Não consuma o corpo nela. |
 | `maxWebhookBytes` | Limite do corpo recebido, padrão 1 MiB. |
-| `onWebhookError` | Observador opcional de falhas de processamento. O SDK não registra mensagens ou credenciais automaticamente. |
+| `onWebhookError` | Observador opcional de falhas dos handlers, inclusive lotes de debounce, e do logger personalizado. |
+| `logWebhookPayloads` | Opcional, padrão `false`. Exibe envelopes validados no terminal; pode revelar dados pessoais. |
+| `onWebhookPayload` | Callback opcional para logger personalizado; recebe uma cópia do envelope e substitui o log no console. |
 | `fetch` | Implementação opcional de Fetch para testes ou transporte personalizado. Deve respeitar cancelamento e `redirect: 'error'`. |
 
 O receptor exige `webhookSecret` ou `authenticateWebhook`. Se fornecer os dois, ambos precisam aprovar a requisição.
@@ -212,11 +214,73 @@ zappaz.onMessage('text', async (ctx) => {
 
 Os handlers de entrada não são disparados por `messages.send`, `outbound-message.upsert` ou mensagens com `fromMe: true`, evitando loops de mensagens próprias. Registre apenas os handlers que desejar executar: os dois exemplos de `onMessage('text', ...)` acima são alternativas; se registrar ambos, ambos executarão em ordem.
 
+### Acumular mensagens de texto com debounce
+
+Disponível a partir da versão `0.2.0`, assim como as opções de log abaixo.
+
+Use `onTextDebounced` **no lugar** de um handler imediato de texto quando quiser responder ao conjunto de mensagens após uma pausa:
+
+```ts
+const cancelarDebounce = zappaz.onTextDebounced(
+  { delayMs: 10000 }, // 5, 10 ou 20 segundos: 5000, 10000 ou 20000 ms.
+  async (ctx) => {
+    const texto = ctx.messages
+      .map((message) => message.text)
+      .filter(Boolean)
+      .join('\n')
+
+    // Envie `texto` ao seu agente e responda uma única vez.
+    await ctx.reply(`Recebi suas mensagens:\n${texto}`)
+  },
+)
+
+// Ao encerrar a integração, descarte timers e lotes ainda não iniciados:
+// cancelarDebounce()
+```
+
+- A configuração é por handler: `delayMs` deve ser inteiro de 1 a 2147483647. Não existe debounce global.
+- Apenas textos recebidos, não próprios, com conteúdo não vazio entram no lote e reiniciam o timer. Imagens, áudios, textos ausentes/em branco e eventos de saída não alteram o prazo.
+- Cada registro tem lotes independentes por sessão e conversa; em grupos, também por `sender.id`. Sem `chatId`, ou sem remetente em grupos, o processamento falha com 500 em vez de misturar usuários. Em conversas privadas, `chatId` basta mesmo se `sender.id` estiver vazio.
+- `ctx.messages` contém as mensagens na ordem em que entram no buffer. `ctx.reply()` responde na conversa; `{quote: true}` cita a **última mensagem do lote** e exige o ID dela.
+- `onEvent` e `onMessage` continuam imediatos e executam antes do armazenamento no buffer. Se falharem, a mensagem não entra no debounce. Evite responder nos dois handlers, pois isso gera respostas adicionais.
+- O webhook retorna 204 após armazenar a mensagem, **antes do processamento do lote**. Falhas posteriores são encaminhadas a `onWebhookError`, sem retry automático nem alteração da resposta HTTP já enviada.
+- Lotes de uma mesma chave e registro são processados sequencialmente, inclusive se novas mensagens chegarem durante um handler lento. Chaves diferentes podem executar em paralelo. Registros diferentes não são serializados entre si.
+- A função retornada cancela o registro, timers e lotes ainda não iniciados; não interrompe um handler em execução nem envia mensagens pendentes.
+
+**Limitações:** o buffer fica em memória, perde mensagens em reinícios e não coordena múltiplas instâncias. Não há deduplicação, limite de mensagens por lote ou prazo máximo enquanto o usuário continua enviando. Timers podem manter o processo ativo até dispararem. Para entrega durável, use uma fila externa.
+
+### Visualizar payloads recebidos no terminal
+
+O log é **desativado por padrão**. Para diagnóstico, configure na mesma instância que recebe o webhook:
+
+```ts
+const zappaz = new Zappaz({
+  baseUrl: process.env.ZAPPAZ_BASE_URL!,
+  apiKey: process.env.ZAPPAZ_API_KEY!,
+  sessionId: process.env.ZAPPAZ_SESSION_ID!,
+  webhookSecret: process.env.ZAPPAZ_WEBHOOK_SECRET!,
+  logWebhookPayloads: true,
+})
+```
+
+`logWebhookPayloads: true` imprime `{event, session, payload}` como JSON formatado via `console.debug`, após autenticação e validação de envelope, sessão, evento e mensagem. Requisições rejeitadas não são registradas. O SDK não inclui os headers HTTP nem sua configuração de API Key/segredo no log, mas **o conteúdo dos payloads não é redigido**: mensagens, telefones e qualquer dado sensível enviado no corpo podem aparecer. Use somente com uma política adequada de proteção de dados.
+
+Para integrar um logger existente, configure `onWebhookPayload`. Esse callback habilita a observação mesmo sem `logWebhookPayloads` e substitui a saída no console, evitando duplicação:
+
+```ts
+// Opção de new Zappaz({...}), usando o logger já existente no projeto:
+// onWebhookPayload: (event) => {
+//   logger.debug({ event }, 'Webhook Zappaz recebido')
+// },
+```
+
+O callback recebe uma cópia isolada do envelope e é aguardado antes dos handlers. Falhas nele são encaminhadas a `onWebhookError`, sem impedir o processamento normal. Falhas no próprio observador de erros são silenciadas. Evite callbacks de log lentos, pois atrasam a resposta HTTP.
+
 ### Respostas HTTP do receptor
 
 | Status | Significado |
 | --- | --- |
-| 204 | Handlers concluíram sem erro; não garante entrega de uma resposta enviada ao WhatsApp. |
+| 204 | Handlers imediatos concluíram e textos foram armazenados no debounce, se configurado; não garante processamento posterior nem entrega ao WhatsApp. |
 | 400 | JSON, envelope ou mensagem normalizada inválidos. |
 | 401 | Segredo ausente/incorreto ou autenticação própria rejeitada. |
 | 403 | Sessão diferente da configurada. |

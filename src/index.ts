@@ -1,4 +1,5 @@
 import { HttpClient, type HttpConfig } from './http.js'
+import { TextDebouncer } from './debounce.js'
 import { Contacts, Groups, Messages, PrivacySettings, Profile, Webhooks } from './resources.js'
 import {
   WEBHOOK_EVENTS,
@@ -30,6 +31,10 @@ export interface ZappazOptions extends HttpConfig {
   maxWebhookBytes?: number
   /** No automatic logging; the consumer decides how to report sensitive exceptions. */
   onWebhookError?: (error: unknown) => void | Promise<void>
+  /** Opt-in console logging of validated webhook envelopes. Contains personal data. */
+  logWebhookPayloads?: boolean
+  /** Opt-in custom logger. Replaces console logging; receives an isolated copy. */
+  onWebhookPayload?: (event: WebhookEnvelope) => void | Promise<void>
 }
 export interface MessageContext<T extends MessageType = MessageType> {
   message: NormalizedMessage & { type: T }
@@ -43,6 +48,16 @@ export interface MessageContext<T extends MessageType = MessageType> {
 type Handler<T extends MessageType = MessageType> = (
   context: MessageContext<T>,
 ) => unknown | Promise<unknown>
+export interface TextDebounceOptions {
+  delayMs: number
+}
+export interface DebouncedTextContext {
+  messages: Array<NormalizedMessage & { type: 'text' }>
+  session: WebhookSession
+  event: 'inbound-message.upsert'
+  /** Replies to the last message in the batch when quote is true. */
+  reply: MessageContext<'text'>['reply']
+}
 type EventHandler = (event: WebhookEnvelope) => unknown | Promise<unknown>
 const knownEvents = new Set<string>(WEBHOOK_EVENTS)
 const messageEvents = new Set([
@@ -61,6 +76,7 @@ export class Zappaz {
   private readonly options: Readonly<ZappazOptions>
   private readonly handlers = new Map<MessageType, Handler[]>()
   private readonly eventHandlers: EventHandler[] = []
+  private readonly textDebouncers = new Set<TextDebouncer>()
 
   constructor(options: ZappazOptions) {
     this.options = { ...options }
@@ -95,6 +111,46 @@ export class Zappaz {
 
   onEvent(handler: EventHandler): void {
     this.eventHandlers.push(handler)
+  }
+
+  /** Returns an unsubscribe function that discards pending, not running, batches. */
+  onTextDebounced(
+    options: TextDebounceOptions,
+    handler: (context: DebouncedTextContext) => unknown | Promise<unknown>,
+  ): () => void {
+    const debouncer = new TextDebouncer(options, handler, (error) => this.reportWebhookError(error))
+    this.textDebouncers.add(debouncer)
+    return () => {
+      debouncer.cancel()
+      this.textDebouncers.delete(debouncer)
+    }
+  }
+
+  private async reportWebhookError(error: unknown): Promise<void> {
+    try {
+      await this.options.onWebhookError?.(error)
+    } catch {
+      /* Observability must not leak details or create unhandled rejections. */
+    }
+  }
+
+  private createContext(message: NormalizedMessage, session: WebhookSession): MessageContext {
+    return {
+      message,
+      session,
+      event: 'inbound-message.upsert',
+      reply: (text, options) => {
+        if (!message.chatId) return Promise.reject(new Error('Mensagem sem chatId para resposta'))
+        const { quote, ...rest } = options ?? {}
+        if (quote && !message.id) return Promise.reject(new Error('Mensagem sem ID para citação'))
+        return this.messages.sendText({
+          ...rest,
+          number: message.chatId,
+          message: text,
+          ...(quote ? { quoted: message.id! } : {}),
+        })
+      },
+    }
   }
 
   async handleWebhook(request: Request): Promise<Response> {
@@ -142,41 +198,39 @@ export class Zappaz {
       return response(400)
     // Capture registration order before calling user code, which can register more handlers.
     const eventHandlers = [...this.eventHandlers]
+    const debouncers = [...this.textDebouncers]
     const message =
       data.event === 'inbound-message.upsert' && isObject(data.payload)
         ? (data.payload.message as NormalizedMessage)
         : undefined
     const handlers = message && !message.fromMe ? [...(this.handlers.get(message.type) ?? [])] : []
+    if (this.options.logWebhookPayloads || this.options.onWebhookPayload) {
+      try {
+        const logged: WebhookEnvelope = structuredClone({
+          event: data.event,
+          payload: data.payload,
+          session: data.session,
+        })
+        if (this.options.onWebhookPayload) await this.options.onWebhookPayload(logged)
+        else console.debug('[Zappaz webhook]', JSON.stringify(logged, null, 2))
+      } catch (error) {
+        await this.reportWebhookError(error)
+      }
+    }
     try {
       for (const handler of eventHandlers) await handler(data)
-      if (message && handlers.length) {
-        const context: MessageContext = {
-          message,
-          session: data.session,
-          event: 'inbound-message.upsert',
-          reply: (text, options) => {
-            if (!message.chatId)
-              return Promise.reject(new Error('Mensagem sem chatId para resposta'))
-            const { quote, ...rest } = options ?? {}
-            if (quote && !message.id)
-              return Promise.reject(new Error('Mensagem sem ID para citação'))
-            return this.messages.sendText({
-              ...rest,
-              number: message.chatId,
-              message: text,
-              ...(quote ? { quoted: message.id! } : {}),
-            })
-          },
-        }
+      if (message && !message.fromMe) {
+        const context = this.createContext(message, data.session)
         for (const handler of handlers) await handler(context)
+        if (message.type === 'text') {
+          for (const debouncer of debouncers) {
+            debouncer.add(context as MessageContext<'text'>)
+          }
+        }
       }
       return response(204)
     } catch (error) {
-      try {
-        await this.options.onWebhookError?.(error)
-      } catch {
-        /* never leak handler or observer details to sender */
-      }
+      await this.reportWebhookError(error)
       return response(500)
     }
   }
