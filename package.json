@@ -1,0 +1,52 @@
+{
+  "name": "@zappaz/zappaz-lite-sdk",
+  "version": "0.1.0",
+  "description": "SDK TypeScript para mensagens, grupos e webhooks da API Zappaz Lite.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/viiniolliveira/zappaz-lite-sdk.git"
+  },
+  "homepage": "https://github.com/viiniolliveira/zappaz-lite-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/viiniolliveira/zappaz-lite-sdk/issues"
+  },
+  "keywords": [
+    "zappaz",
+    "whatsapp",
+    "sdk",
+    "typescript",
+    "webhooks"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "WEBHOOKS.md",
+    "docs",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "bun run build && bun run test:bun && bun run test:node",
+    "test:bun": "bun test && bun test ./test/runtime.node.mjs ./test/responses.node.mjs ./test/webhooks.node.mjs",
+    "test:node": "node --test test/runtime.node.mjs test/responses.node.mjs test/webhooks.node.mjs test/package.node.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.type-tests.json",
+    "format": "prettier --write src package.json tsconfig*.json",
+    "format:check": "prettier --check src package.json tsconfig*.json"
+  },
+  "devDependencies": {
+    "prettier": "^3.10.0",
+    "typescript": "^5.9.3"
+  }
+}
