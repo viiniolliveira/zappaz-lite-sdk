@@ -20,7 +20,7 @@ function event(overrides: Record<string, unknown> = {}, messageOverrides: Record
   return {
     event: 'inbound-message.upsert',
     payload: { message: {
-      id: 'message-1', chatId: 'group@g.us', remoteJid: null, lid: 'user@lid',
+      id: '05b0a10a-cb46-4edf-b05d-60324044e985', messageId: 'message-1', conversationId: 'a4cba58d-19b4-455c-85f1-118f65f334d7', chatId: 'group@g.us', remoteJid: null, lid: 'user@lid',
       fromMe: false, isGroup: true, sender: { id: 'user@lid', name: 'User' },
       timestamp: '2026-10-30T23:20:00.000Z', type: 'text', text: 'Olá',
       ...messageOverrides,
@@ -169,7 +169,7 @@ describe('webhook and reply', () => {
   test('quoted reply fails when message ID is null', async () => {
     const { sdk, requests } = setup()
     sdk.onMessage('text', async (ctx) => { await ctx.reply('hello', { quote: true }) })
-    expect(isSuccess(await sdk.handleWebhook(webhook(event({}, { id: null })) ))).toBe(false)
+    expect(isSuccess(await sdk.handleWebhook(webhook(event({}, { messageId: null })) ))).toBe(false)
     expect(requests).toHaveLength(0)
   })
 

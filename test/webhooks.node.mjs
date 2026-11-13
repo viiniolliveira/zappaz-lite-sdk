@@ -7,7 +7,7 @@ import { Zappaz } from '../dist/index.js'
 const session = { id: 'session-1', status: 'open', jid: '100@s.whatsapp.net' }
 const secret = 'test-secret'
 const reference = { id: 'm1', chatId: '123@g.us', remoteJid: null, lid: '456@lid', fromMe: false }
-const baseMessage = { ...reference, isGroup: true, sender: { id: '456@lid', name: 'Alice' }, timestamp: '2026-01-01T00:00:00.000Z' }
+const baseMessage = { ...reference, id: '05b0a10a-cb46-4edf-b05d-60324044e985', messageId: 'm1', conversationId: 'a4cba58d-19b4-455c-85f1-118f65f334d7', isGroup: true, sender: { id: '456@lid', name: 'Alice' }, timestamp: '2026-01-01T00:00:00.000Z' }
 const thumbnail = { mimeType: 'image/jpeg', base64: 'AA==', width: 1, height: 1 }
 const vote = { voterId: '456@lid', fromMe: false, selectedOptions: ['A'], timestamp: null }
 const messageVariants = {
@@ -27,6 +27,35 @@ const messageVariants = {
   unavailable: { unavailable: { reason: 'linked_device' } },
   unknown: {},
 }
+
+for (const event of ['inbound-message.upsert', 'outbound-message.upsert', 'messages.send']) {
+  for (const key of ['id', 'messageId', 'conversationId']) {
+    test(`${event} requires nullable ${key} without legacy fallback`, async () => {
+      for (const invalid of [undefined, 42, {}]) {
+        const { zappaz, events } = setup()
+        const message = { ...baseMessage, type: 'text', [key]: invalid }
+        assert.equal((await zappaz.handleWebhook(request({ event, session, payload: { message } }))).status, 400)
+        assert.equal(events.length, 0)
+      }
+    })
+  }
+  test(`${event} preserves null persistence IDs for non-persisted reactions`, async () => {
+    const { zappaz, events } = setup()
+    const message = { ...baseMessage, id: null, conversationId: null, type: 'reaction', reaction: { messageId: 'target', emoji: '👍' } }
+    assert.equal((await zappaz.handleWebhook(request({ event, session, payload: { message } }))).status, 204)
+    assert.deepEqual(events[0].payload.message, message)
+  })
+}
+
+test('quoted reply uses WhatsApp ID even without a persisted record', async () => {
+  const zappaz = debouncedSetup(), sent = []
+  zappaz.messages.sendText = async body => { sent.push(body); return { status: 'success' } }
+  zappaz.onMessage('text', ctx => ctx.reply('answer', { quote: true }))
+  assert.equal((await send(zappaz, { id: null, conversationId: null, messageId: 'wa-only' })).status, 204)
+  assert.equal(sent[0].quoted, 'wa-only')
+  assert.equal((await send(zappaz, { messageId: null })).status, 500)
+  assert.equal(sent.length, 1)
+})
 
 function request(data) {
   return new Request('https://zappaz.example.test/webhook', { method: 'POST', headers: { 'content-type': 'application/json', 'x-zappaz-webhook-secret': secret }, body: JSON.stringify(data) })
@@ -57,7 +86,7 @@ test('selection, template replies and PN, LID, group and null identities survive
   const variants = [
     { chatId: '123@s.whatsapp.net', remoteJid: '123@s.whatsapp.net', lid: null, isGroup: false, sender: { id: '123@s.whatsapp.net' }, selection: { kind: 'button', id: 'yes' }, templateReply: { selectedId: 'yes', selectedIndex: 0 } },
     { chatId: '456@lid', remoteJid: null, lid: '456@lid', isGroup: false, sender: { id: '456@lid' }, selection: { kind: 'list', id: null } },
-    { id: null, chatId: null, remoteJid: null, lid: null, isGroup: false, sender: { id: null }, timestamp: null },
+    { id: null, messageId: null, conversationId: null, chatId: null, remoteJid: null, lid: null, isGroup: false, sender: { id: null }, timestamp: null },
     { chatId: '123@g.us', remoteJid: null, lid: null, isGroup: true, sender: { id: '456@lid' } },
   ]
   for (const fields of variants) {
@@ -143,9 +172,9 @@ test('debounce resets for valid texts, dispatches after immediate handlers, and 
     await ctx.reply('answer', { quote: true })
   })
   try {
-    assert.equal((await send(zappaz, { id: 'first', text: 'one' })).status, 204)
+    assert.equal((await send(zappaz, { id: 'first', messageId: 'wa-first', text: 'one' })).status, 204)
     await sleep(60)
-    assert.equal((await send(zappaz, { id: 'last', text: 'two' })).status, 204)
+    assert.equal((await send(zappaz, { id: 'last', messageId: 'wa-last', text: 'two' })).status, 204)
     await sleep(55)
     assert.equal(batches.length, 0)
     assert.deepEqual(immediate, ['first', 'last'])
@@ -153,7 +182,7 @@ test('debounce resets for valid texts, dispatches after immediate handlers, and 
     assert.deepEqual(batches[0].messages.map(m => m.id), ['first', 'last'])
     assert.deepEqual(batches[0].session, session)
     assert.equal(batches[0].event, 'inbound-message.upsert')
-    assert.deepEqual(sent, [{ number: baseMessage.chatId, message: 'answer', quoted: 'last' }])
+    assert.deepEqual(sent, [{ number: baseMessage.chatId, message: 'answer', quoted: 'wa-last' }])
   } finally { unsubscribe() }
 })
 

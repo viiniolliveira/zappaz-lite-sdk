@@ -76,7 +76,11 @@ export const MESSAGE_TYPES = [
 ] as const
 export type MessageType = (typeof MESSAGE_TYPES)[number]
 export interface NormalizedMessage {
+  /** Internal persisted WaMessage UUID, never a WhatsApp ID. */
   id: string | null
+  /** WhatsApp message ID. */
+  messageId: string | null
+  conversationId: string | null
   chatId: string | null
   remoteJid: string | null
   lid: string | null
@@ -108,6 +112,7 @@ export interface NormalizedMessage {
   [key: string]: unknown
 }
 export interface MessageReply {
+  /** WhatsApp message ID (unchanged by the top-level message contract). */
   id: string
   senderId?: string
   type?: MessageType
@@ -167,6 +172,165 @@ export type UpdateWebhook = Partial<CreateWebhook>
 export interface Pagination {
   page?: string
   pageSize?: string
+}
+
+export interface MessageFilters {
+  conversationId?: string
+  phoneNumber?: string
+  lid?: string
+  jid?: string
+}
+export type MessageLookupFilters = MessageFilters &
+  {
+    [K in keyof MessageFilters]: Required<Pick<MessageFilters, K>>
+  }[keyof MessageFilters]
+export type MessageListQuery = MessageFilters & { limit?: number } & (
+    { before?: string; after?: never } | { after?: string; before?: never }
+  )
+export interface MessageListResponse {
+  status: 'success'
+  data: MessageDTO[]
+  page: { hasMore: boolean; nextCursor: string | null }
+  boundaries: { first: string | null; last: string | null }
+}
+
+interface RecordIdentity {
+  id: string
+  sessionId: string
+  createdAt: string
+  updatedAt: string
+  revision: number
+}
+export interface MediaThumbnail {
+  mimeType: 'image/jpeg'
+  base64: string
+  width: number | null
+  height: number | null
+}
+export interface MediaDTO extends RecordIdentity {
+  conversationId: string
+  messageRecordId: string
+  kind: 'image' | 'video' | 'audio' | 'document' | 'sticker'
+  mimeType: string | null
+  fileName: string | null
+  size: number | null
+  duration: number | null
+  width: number | null
+  height: number | null
+  voice: boolean
+  thumbnail: MediaThumbnail | null
+  storageStatus: 'not_saved' | 'pending' | 'ready' | 'failed'
+  contentPath: string
+}
+export interface SharedContactDTO {
+  name: string | null
+  vcard: string | null
+  parsed: {
+    name: string | null
+    firstName: string | null
+    lastName: string | null
+    phones: Array<{ number: string; waid: string | null; types: string[] }>
+    emails: string[]
+    organization: string | null
+  } | null
+}
+/** Persisted REST representation; distinct from the normalized webhook message. */
+export interface MessageDTO extends RecordIdentity {
+  conversationId: string
+  messageId: string
+  clientRequestId: string | null
+  fromMe: boolean
+  sender: { jid: string | null; name: string | null }
+  type: Exclude<MessageType, 'reaction'>
+  text: string | null
+  linkPreview: {
+    url: string
+    title: string | null
+    description: string | null
+    thumbnail: MediaThumbnail | null
+  } | null
+  hasLink: boolean
+  interactive: {
+    title: string | null
+    footer: string | null
+    payment?: {
+      referenceId: string
+      currency: string
+      totalAmount: { value: number; offset: number }
+      items: Array<{ name: string; quantity: number }>
+      pixCode: string
+    }
+    buttons: Array<{
+      kind: 'url' | 'reply' | 'unsupported'
+      text: string
+      id: string | null
+      url: string | null
+    }>
+    list?: {
+      buttonText: string
+      sections: Array<{
+        title: string | null
+        rows: Array<{ id: string | null; title: string; description: string | null }>
+      }>
+    }
+  } | null
+  poll: {
+    name: string
+    selectableOptionsCount: number
+    options: Array<{ name: string; hash: string; votes: number }>
+    votes: Array<{
+      voterId: string
+      fromMe: boolean
+      selectedOptions: string[]
+      timestamp: string | null
+    }>
+  } | null
+  album: { expectedImageCount: number; expectedVideoCount: number } | null
+  groupInvite: {
+    groupJid: string | null
+    name: string
+    expiresAt: string | null
+    url: string | null
+    thumbnail: MediaThumbnail | null
+  } | null
+  system: {
+    kind: 'disappearing_mode' | 'block_contact'
+    duration: number | null
+    blocked: boolean | null
+  } | null
+  unavailable: { reason: 'missing_content' | 'linked_device' } | null
+  selection: { kind: 'button' | 'list'; id: string | null } | null
+  status: MessageStatus | null
+  sentAt: string | null
+  orderAt: string
+  editedAt: string | null
+  deletedAt: string | null
+  media: MediaDTO | null
+  replyTo: {
+    messageRecordId: string | null
+    messageId: string
+    senderJid: string | null
+    fromMe?: boolean | null
+    type: Exclude<MessageType, 'reaction'>
+    text: string | null
+    contacts: SharedContactDTO[]
+    media: {
+      mimeType: string | null
+      fileName: string | null
+      thumbnail?: MediaThumbnail | null
+    } | null
+  } | null
+  location: {
+    latitude: number | null
+    longitude: number | null
+    name: string | null
+    address: string | null
+    url: string | null
+    thumbnail: MediaThumbnail | null
+  } | null
+  contacts: SharedContactDTO[]
+  mentions: string[]
+  reactions: Array<{ senderJid: string; fromMe: boolean; emoji: string; timestamp: string | null }>
 }
 export interface LogQuery extends Pagination {
   event?: string

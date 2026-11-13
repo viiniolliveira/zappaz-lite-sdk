@@ -4,10 +4,12 @@ Todos os recursos pertencem à sessão configurada na instância `zappaz`. O SDK
 
 `S` significa `/api/v1/session/:sessionId`. Nenhum método cria a sessão. Os bodies abaixo são objetos JSON, exceto arrays diretos de participantes; operações sem body não enviam `{}`. Exemplos e contratos de eventos estão no [README](../README.md) e em [WEBHOOKS.md](../WEBHOOKS.md).
 
-## Mensagens e mídia — 11 rotas
+## Mensagens e mídia — 13 rotas
 
 | Método | HTTP | Entrada principal |
 | --- | --- | --- |
+| `messages.list(query?, options?)` | `GET S/messages` | `conversationId?`, `phoneNumber?`, `lid?`, `jid?`, `limit?`, `before?` ou `after?` |
+| `messages.get(messageId, filters, options?)` | `GET S/messages/:messageId` | ID WhatsApp e pelo menos um filtro: `conversationId`, `phoneNumber`, `lid` ou `jid` |
 | `messages.sendText(input)` | `POST S/message/text` | `{number, message, linkPreview?, signMessage?, signatureName?, ...}` |
 | `messages.sendImage(input)` | `POST S/message/image` | `{number, source, fileName?, caption?, ...}` |
 | `messages.sendVideo(input)` | `POST S/message/video` | Campos de imagem e `gifPlayback?` |
@@ -24,7 +26,17 @@ Campos comuns de envio: `number`, `mentions?`, `quoted?` e `delay?`. A API aceit
 
 Envios preservam `{status: 'success', message?: unknown}`: o resultado bruto não é uma mensagem normalizada de webhook e pode ser nulo/ausente. Edição preserva `{status, data}` com DTO ainda tipado como `unknown`; exclusão preserva `{status, deleted}` quando esse campo é produzido. Use IDs WhatsApp, não UUIDs internos do chat.
 
-Base64: `{status, data: {media, mimeType, fileName}}`, com MIME/nome anuláveis. Binário: `{status, headers, data: ArrayBuffer}`, preservando status e headers HTTP. Não há paginação nessas rotas.
+Base64: `{status, data: {media, mimeType, fileName}}`, com MIME/nome anuláveis. Binário: `{status, headers, data: ArrayBuffer}`, preservando status e headers HTTP. Não há paginação nas rotas de mídia.
+
+### Consultas persistidas
+
+`messages.list` retorna `{status: 'success', data: MessageDTO[], page: {hasMore, nextCursor}, boundaries: {first, last}}`. Os cursores e os limites `first`/`last` são strings opacas ou `null`. `limit` é inteiro de 1 a 100 (padrão 50); `before` e `after` são mutuamente exclusivos. A ordenação e a semântica dos cursores seguem o histórico por conversa. Cursores são vinculados à sessão e aos filtros: preserve-os ao continuar a consulta. Não existe filtro `type`.
+
+Filtros combinados usam AND: `conversationId` é UUID, `phoneNumber` contém somente dígitos com código do país, `lid` é JID completo terminado em `@lid` e `jid` é JID PN ou LID completo. Sem filtro de identidade, a listagem abrange a sessão. A resolução PN/LID usa identidade persistida, sem criar contatos. Grupos não são incluídos.
+
+`messages.get` retorna `{status: 'success', data: MessageDTO}` e recebe **ID WhatsApp**, não UUID interno. Ausência no escopo retorna 404; filtro ausente ou parâmetros inválidos geram o erro de validação padrão da API. O SDK expressa filtros e exclusão de cursores nos tipos; a validação dos valores e do escopo é feita pelo servidor, preservando seus erros.
+
+Ambos consultam persistência, não exigem WhatsApp conectado e mantêm autenticação/autorização de sessão. `MessageDTO` inclui UUID interno `id`, `messageId` WhatsApp, `conversationId`, `sessionId`, mídia e metadados REST; não é `NormalizedMessage`. Os endpoints existentes `/conversations/:conversationId/messages` e `/conversations/:conversationId/messages/:messageRecordId` não mudam; o último continua recebendo UUID interno. Nenhum método extra para essas rotas foi adicionado.
 
 Limites atuais da API: texto até 65536 caracteres, legenda até 4096, nome de arquivo até 255 e `delay` inteiro de 0 a 10000 ms. Mídia padrão até 25 MiB decodificados, configurável no servidor. Localização exige endereço ou coordenadas utilizáveis; o backend atual tem uma ressalva com coordenadas `0`, portanto não presuma aceitação de `0,0`.
 

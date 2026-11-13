@@ -31,7 +31,11 @@ O SDK autentica, limita o corpo e confere envelope e sessão antes do despacho. 
 
 ### Mensagem normalizada
 
-`id`, `chatId`, `remoteJid`, `lid` e `timestamp` são `string | null`. `fromMe` e `isGroup` são booleanos; `sender` contém `id: string | null` e `name?: string`. Não converta LID em telefone. Nos grupos, use `chatId` para responder, não `sender.id`.
+Nos três eventos de mensagem acima, `id` é o UUID interno de WaMessage, `messageId` é o ID WhatsApp e `conversationId` é o UUID interno da conversa. Os três campos são obrigatórios e aceitam `null`. `id` e `conversationId` ficam nulos quando não há registro persistido, como em reações ou envelopes de controle; não há UUID inventado nem fallback para o ID WhatsApp. Os identificadores internos vêm da gravação confirmada, inclusive para mensagens já persistidas. O SDK rejeita o formato antigo.
+
+`chatId`, `remoteJid`, `lid` e `timestamp` também são `string | null`. `fromMe` e `isGroup` são booleanos; `sender` contém `id: string | null` e `name?: string`. Não converta LID em telefone. Nos grupos, use `chatId` para responder, não `sender.id`. O payload continua normalizado, não é o `MessageDTO` REST.
+
+Para montar uma thread, use `session.id` e `message.conversationId` quando não nulo. Para identificar ou citar a mensagem WhatsApp, use `message.messageId`. O UUID `message.id`, quando não nulo, é destinado ao endpoint REST existente por registro interno; não ao novo `messages.get`.
 
 | `message.type` | Campos produzidos quando disponíveis |
 | --- | --- |
@@ -50,7 +54,7 @@ O SDK autentica, limita o corpo e confere envelope e sessão antes do despacho. 
 Os campos de conteúdo são opcionais e podem coexistir; isso **não é uma união discriminada estrita** que torne um campo obrigatório conforme `type`.
 
 - `media` pode conter `mimeType`, `fileName`, `size`, `duration`, `voice`, `downloadPath` e miniatura JPEG. Não contém o arquivo completo. O download exige uma chamada autenticada à API.
-- `replyTo` contém `id`, `senderId?` e o conteúdo citado disponível, incluindo mídia e miniatura. Não há citação aninhada ou download inventado para a mensagem citada.
+- `replyTo` contém `id` (ID WhatsApp, sem alteração), `senderId?` e o conteúdo citado disponível, incluindo mídia e miniatura. Não há citação aninhada ou download inventado para a mensagem citada.
 - `interactive` contém título, rodapé e botões, com lista ou pagamento quando reconhecidos. Respostas a botão/lista usam `selection`; respostas de template usam `templateReply`. Nem toda interação altera `type`.
 - `contacts[].parsed` contém nome, primeiro/último nome, telefones, e-mails e organização. O vCard original é preservado. Os telefones do contato compartilhado não identificam necessariamente o remetente.
 - `mentions`, `status`, `reactions` e `receipts` podem acompanhar a mensagem normalizada.
@@ -60,7 +64,7 @@ O SDK valida os campos comuns declarados em `NormalizedMessage`. Campos complexo
 
 ### Atualizações, reações e recibos
 
-Todos usam referências com `id`, `chatId`, `remoteJid`, `lid` anuláveis e `fromMe` booleano.
+Todos usam referências com `id`, `chatId`, `remoteJid`, `lid` anuláveis e `fromMe` booleano. Nessas referências, `id` continua sendo o ID WhatsApp. A mudança de identidade se limita à mensagem de nível superior de `inbound-message.upsert`, `outbound-message.upsert` e `messages.send`; IDs de remetentes também não mudam.
 
 - `messages.update`: itens podem conter `status`, `pollVotes` e `location` final. Status ausente não é inferido; os valores conhecidos são `error`, `pending`, `sent`, `delivered`, `read` e `played`. Coordenadas da atualização final podem ser nulas.
 - `messages.reaction`: itens incluem `sender: {id, fromMe}`, `emoji` e `timestamp`. `emoji: ''` indica remoção. O remetente da reação pode diferir do autor da mensagem alvo.

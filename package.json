@@ -1,6 +1,6 @@
 {
   "name": "@zappaz/zappaz-lite-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "SDK TypeScript para mensagens, grupos e webhooks da API Zappaz Lite.",
   "license": "MIT",
   "repository": {

@@ -16,6 +16,8 @@ const prefix = `/prefix/api/v1/session/${segment(sessionId)}/`
 const number = '123@s.whatsapp.net'
 const participants = ['one@lid', 'two@s.whatsapp.net']
 const cases = [
+ ['messages.list','GET','messages',[{phoneNumber:'5511999999999',lid:'123@lid',jid:'123@s.whatsapp.net',conversationId:'conversation',limit:25,before:'cursor /+'}],undefined,{phoneNumber:'5511999999999',lid:'123@lid',jid:'123@s.whatsapp.net',conversationId:'conversation',limit:'25',before:'cursor /+'}],
+ ['messages.get','GET',`messages/${segment(id)}`,[id,{jid:'123@lid'}],undefined,{jid:'123@lid'}],
  ['messages.sendText','POST','message/text',[{number,message:'hello',linkPreview:false}],{number,message:'hello',linkPreview:false}],
  ['messages.sendImage','POST','message/image',[{number,source:'image',caption:'hi'}],{number,source:'image',caption:'hi'}],
  ['messages.sendVideo','POST','message/video',[{number,source:'video',gifPlayback:false}],{number,source:'video',gifPlayback:false}],
@@ -54,7 +56,7 @@ const cases = [
 ]
 function invoke(sdk, name, args) { const [resource, method] = name.split('.'); return sdk[resource][method](...args) }
 
-test('catalogue covers 46 routes', () => assert.equal(cases.length, 46))
+test('catalogue covers 48 routes', () => assert.equal(cases.length, 48))
 for (const [name, method, path, args, body, query] of cases) {
  test(`${name}: request and success`, async () => {
   const result = {status:'success', data:[{id:'synthetic'}], marker:name}
@@ -108,7 +110,7 @@ test('network failure, abort, timeout, and unsafe redirect do not retry', async 
 
 const secret = 'fake-webhook-secret'
 const session = {id:sessionId,status:'open',jid:null}
-const message = {id:'m1',chatId:'chat@g.us',remoteJid:null,lid:null,fromMe:false,isGroup:true,sender:{id:null},timestamp:null,type:'text',text:'hello'}
+const message = {id:'05b0a10a-cb46-4edf-b05d-60324044e985',messageId:'m1',conversationId:'a4cba58d-19b4-455c-85f1-118f65f334d7',chatId:'chat@g.us',remoteJid:null,lid:null,fromMe:false,isGroup:true,sender:{id:null},timestamp:null,type:'text',text:'hello'}
 const envelope = (event='inbound-message.upsert',payload={message}) => ({event,payload,session})
 function hook(body, headers={}) { return new Request('https://zappaz.example.test/hook',{method:'POST',headers:{'content-type':'application/json','x-zappaz-webhook-secret':secret,...headers},body:typeof body==='string'?body:JSON.stringify(body)}) }
 

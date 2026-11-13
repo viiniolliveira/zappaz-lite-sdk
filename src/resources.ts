@@ -4,6 +4,10 @@ import type {
   CreateWebhook,
   DisappearingMode,
   LogQuery,
+  MessageDTO,
+  MessageListQuery,
+  MessageListResponse,
+  MessageLookupFilters,
   Pagination,
   Privacy,
   RequestOptions,
@@ -27,6 +31,17 @@ type Page<T> = Data<T[]> & { page: string; pageSize: string; total: number }
 export type BinaryMedia = { status: number; headers: Headers; data: ArrayBuffer }
 export class Messages {
   constructor(private http: HttpClient) {}
+  /** Persisted session messages, excluding groups. Filters are combined with AND. */
+  list(query?: MessageListQuery, options?: RequestOptions) {
+    return this.http.request<MessageListResponse>('GET', ['messages'], { ...options, query })
+  }
+  /** Lookup by WhatsApp ID, scoped to at least one conversation filter. */
+  get(messageId: string, filters: MessageLookupFilters, options?: RequestOptions) {
+    return this.http.request<Data<MessageDTO>>('GET', ['messages', messageId], {
+      ...options,
+      query: filters,
+    })
+  }
   sendText(body: SendText, options?: RequestOptions) {
     return this.http.request<SendResult>('POST', ['message', 'text'], { ...options, body })
   }

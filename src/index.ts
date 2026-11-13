@@ -142,12 +142,13 @@ export class Zappaz {
       reply: (text, options) => {
         if (!message.chatId) return Promise.reject(new Error('Mensagem sem chatId para resposta'))
         const { quote, ...rest } = options ?? {}
-        if (quote && !message.id) return Promise.reject(new Error('Mensagem sem ID para citação'))
+        if (quote && !message.messageId)
+          return Promise.reject(new Error('Mensagem sem ID WhatsApp para citação'))
         return this.messages.sendText({
           ...rest,
           number: message.chatId,
           message: text,
-          ...(quote ? { quoted: message.id! } : {}),
+          ...(quote ? { quoted: message.messageId! } : {}),
         })
       },
     }

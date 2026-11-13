@@ -7,6 +7,9 @@ const webhook = { id:'hook-1', url:'https://example.test/hook', enabled:true, cr
 const log = { id:'log-1', webhookId:'hook-1', createdAt:'2026-01-02T00:00:00.000Z', response:{status:204}, url:'https://example.test/hook', event:'call', sessionId:'session-1', webhookDisplayName:null, waSessionEventId:null, payload:{}, messageId:null, parentLogId:null }
 const participantResults = [{jid:'a@example.test',status:'200'}, {jid:'b@example.test',status:'403'}]
 const fixtures = [
+ ['messages.list empty', z => z.messages.list(), {status:'success',data:[],page:{hasMore:false,nextCursor:null},boundaries:{first:null,last:null}}],
+ ['messages.list cursor', z => z.messages.list({after:'opaque',limit:1}), {status:'success',data:[{id:'record',messageId:'wa',conversationId:'conversation',sessionId:'session-1',media:null}],page:{hasMore:true,nextCursor:'next'},boundaries:{first:'first',last:'last'}}],
+ ['messages.get', z => z.messages.get('wa',{phoneNumber:'5511999999999'}), {status:'success',data:{id:'record',messageId:'wa',conversationId:'conversation',sessionId:'session-1',media:{contentPath:'/media/record'},metadata:{preserved:true}}}],
  ['webhooks.list', z => z.webhooks.list({page:'2',pageSize:'10'}), {status:'success',data:[webhook],page:'2',pageSize:'10',total:12}],
  ['webhooks.listLogs', z => z.webhooks.listLogs('hook-1',{page:'3',pageSize:'5'}), {status:'success',data:[log],page:'3',pageSize:'5',total:11}],
  ['webhooks.getLog', z => z.webhooks.getLog('hook-1','log-1'), log],
@@ -31,5 +34,12 @@ for (const [name,invoke,fixture] of fixtures) {
   const zappaz=new Zappaz({baseUrl:'https://api.example.test',apiKey:'fake-key',sessionId:'session-1',fetch:async()=>{calls++;return Response.json(fixture)}})
   assert.deepEqual(await invoke(zappaz),fixture)
   assert.equal(calls,1)
+ })
+}
+
+for (const status of [400, 404]) {
+ test(`messages.get preserves scoped ${status} errors`, async () => {
+  const zappaz = new Zappaz({baseUrl:'https://api.example.test',apiKey:'key',sessionId:'session-1',fetch:async()=>Response.json({error:{code:'SCOPED_ERROR',message:'Not available'}},{status})})
+  await assert.rejects(zappaz.messages.get('wa',{lid:'123@lid'}), error => error.status === status && error.code === 'SCOPED_ERROR')
  })
 }

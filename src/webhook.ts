@@ -34,7 +34,9 @@ function validMedia(value: unknown): boolean {
 export function validMessage(value: unknown): value is NormalizedMessage {
   if (!isObject(value)) return false
   return (
-    ['id', 'chatId', 'remoteJid', 'lid', 'timestamp'].every((key) => nullableString(value[key])) &&
+    ['id', 'messageId', 'conversationId', 'chatId', 'remoteJid', 'lid', 'timestamp'].every((key) =>
+      nullableString(value[key]),
+    ) &&
     boolean(value.fromMe) &&
     boolean(value.isGroup) &&
     isObject(value.sender) &&

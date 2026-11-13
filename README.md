@@ -210,7 +210,20 @@ zappaz.onMessage('text', async (ctx) => {
 })
 ```
 
-`reply` usa `chatId`, inclusive em grupos, e falha se ele estiver ausente. Não cita por padrão. `quote: true` exige `message.id` e depende do armazenamento da mensagem no backend. Os defaults de prévia de link e assinatura da sessão são preservados; opções como `linkPreview: false` e `signMessage: false` podem ser passadas explicitamente.
+`reply` usa `chatId`, inclusive em grupos, e falha se ele estiver ausente. Não cita por padrão. `quote: true` exige `message.messageId` (ID WhatsApp) e depende do armazenamento da mensagem no backend. `message.id` é o UUID interno, e `message.conversationId` é o UUID da conversa; ambos podem ser nulos. O contrato antigo de webhook não é aceito. Os defaults de prévia de link e assinatura da sessão são preservados; opções como `linkPreview: false` e `signMessage: false` podem ser passadas explicitamente.
+
+### Consultar mensagens persistidas
+
+```ts
+const history = await zappaz.messages.list({ phoneNumber: '5511999999999', limit: 50 })
+if (history.page.hasMore && history.page.nextCursor) {
+  await zappaz.messages.list({ phoneNumber: '5511999999999', limit: 50, before: history.page.nextCursor })
+}
+const result = await zappaz.messages.get('ID_WHATSAPP', { jid: '5511999999999@s.whatsapp.net' })
+console.log(result.data.id, result.data.conversationId)
+```
+
+Essas consultas não incluem grupos nem exigem WhatsApp conectado. `get` exige pelo menos um filtro de conversa e recebe ID WhatsApp, não UUID interno. Veja filtros e cursores em [docs/API.md](docs/API.md).
 
 Os handlers de entrada não são disparados por `messages.send`, `outbound-message.upsert` ou mensagens com `fromMe: true`, evitando loops de mensagens próprias. Registre apenas os handlers que desejar executar: os dois exemplos de `onMessage('text', ...)` acima são alternativas; se registrar ambos, ambos executarão em ordem.
 
@@ -347,7 +360,7 @@ Para cancelar uma chamada em andamento, invoque `controller.abort()`. Nenhuma op
 - ESM com declarações `.d.ts`; CJS não é anunciado.
 - Exercitado com **Bun 1.4.3** e **Node 25.2.1**. Outras versões não foram certificadas.
 - O runtime precisa de Fetch, Web Crypto e AbortController nativos.
-- Métodos e testes de transporte para as **46 rotas** do recorte de integração. Veja [a referência](docs/API.md).
+- Métodos e testes de transporte para as **48 rotas** do recorte de integração. Veja [a referência](docs/API.md).
 - Os testes usam fixtures e servidores locais, incluindo redirect entre origens e consumo do pacote empacotado. Não substituem testes com uma sessão real.
 - Respostas complexas não comprovadas permanecem `unknown`; a validação de negócio dos bodies cabe à API, sem reimplementar seus schemas no consumidor.
 - Fora do escopo: administração, criação de sessão, chat, agenda local, Socket.IO e MCP.
